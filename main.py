@@ -221,6 +221,7 @@ async def process_attendance_frame(
     file: UploadFile = File(...),
     class_id: str = Form(...),
     teacher_name: str = Form(...),
+    subject_name: str = Form(...),  # New field for subject
     date: Optional[str] = Form(None) # Allow date to be sent or determined by backend
 ):
     print(f"Received frame for attendance in class {class_id} by {teacher_name}")
@@ -259,6 +260,12 @@ async def process_attendance_frame(
                 "section": student.section
             })
 
+    # Normalize fields for robust matching
+    norm_class_id = class_id.strip().lower()
+    norm_teacher_name = teacher_name.strip().lower()
+    norm_subject_name = subject_name.strip().lower()
+    # We'll also normalize section and student fields
+
     for i, face_encoding in enumerate(face_encodings):
         # Get the corresponding face_location for the current face_encoding
         current_face_location = face_locations[i]
@@ -276,39 +283,41 @@ async def process_attendance_frame(
             if best_match_index != -1:
                 matched_student = known_student_data[best_match_index]
                 student_obj_id = matched_student["student_id"]
-
-                if student_obj_id not in matched_students_ids:
-                    # Check if attendance already marked for this session
-                    existing_attendance = await AttendanceRecord.find_one({
-                        "student_id": student_obj_id,
-                        "class_name": class_id, # Assuming class_id passed from frontend is the actual class_name
-                        "date": date,
-                        "teacher_name": teacher_name,
-                        "section": matched_student["section"] # Add section to the uniqueness check
-                    })
-                    
-                    student_response_data = {
-                        **matched_student,
-                        "face_location": list(current_face_location) # Add face location to the response
-                    }
-
-                    if not existing_attendance:
-                        attendance_record = AttendanceRecord(
-                            student_id=student_obj_id,
-                            roll_no=matched_student["roll_no"],
-                            name=matched_student["name"],
-                            class_name=matched_student["class_name"],
-                            section=matched_student["section"],
-                            teacher_name=teacher_name,
-                            date=date,
-                            time=current_time,
-                            status="Present"
-                        )
-                        await attendance_record.insert()
-                        recognized_students.append({**student_response_data, "status": "Present"})
-                    else:
-                        recognized_students.append({**student_response_data, "status": "Already Present"})
-                    matched_students_ids.add(student_obj_id)
+                norm_section = matched_student["section"].strip().lower()
+                # Check if attendance already marked for this subject, student, and day
+                attendance_query = {
+                    "student_id": student_obj_id,
+                    "class_name": norm_class_id,
+                    "date": date,
+                    "teacher_name": norm_teacher_name,
+                    "section": norm_section,
+                    "subject_name": norm_subject_name
+                }
+                print(f"Attendance query: {attendance_query}")
+                existing_attendance = await AttendanceRecord.find_one(attendance_query)
+                print(f"Existing attendance found: {existing_attendance is not None}")
+                student_response_data = {
+                    **matched_student,
+                    "face_location": list(current_face_location) # Add face location to the response
+                }
+                if not existing_attendance:
+                    attendance_record = AttendanceRecord(
+                        student_id=student_obj_id,
+                        roll_no=matched_student["roll_no"],
+                        name=matched_student["name"],
+                        class_name=norm_class_id,
+                        section=norm_section,
+                        teacher_name=norm_teacher_name,
+                        date=date,
+                        time=current_time,
+                        status="Present",
+                        subject_name=norm_subject_name
+                    )
+                    await attendance_record.insert()
+                    recognized_students.append({**student_response_data, "status": "Present"})
+                else:
+                    recognized_students.append({**student_response_data, "status": "Already Present"})
+                matched_students_ids.add(student_obj_id)
 
     return {"status": "success", "recognized_students": recognized_students}
 

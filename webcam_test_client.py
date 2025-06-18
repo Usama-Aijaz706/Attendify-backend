@@ -16,10 +16,11 @@ GET_STUDENTS_ENDPOINT = f"{BACKEND_BASE_URL}/admin/students"
 # NOTE: For this client, ensure CLASS_ID matches the class_name stored in your student data
 CLASS_ID = "BSCS 8th" # Example class ID, ensure consistency with DB
 TEACHER_NAME = "Miss Maria Khattak" # Example teacher name
+SUBJECT_NAME = "Mathematics"  # Example subject name, change as needed
 
 # --- Performance Settings --- #
-FRAME_SKIP = 2  # Process every nth frame for local detection
-SEND_INTERVAL = 1.0  # seconds between sending frames to backend for new detections
+FRAME_SKIP = 8  # Process every 8th frame for local detection (increased for performance)
+SEND_INTERVAL = 2.0  # seconds between sending frames to backend for new detections (increased for performance)
 MIN_FACE_SIZE = 80
 MAX_ASPECT_RATIO = 1.5
 RECOGNITION_TOLERANCE = 0.6 # How strict face_recognition matching is
@@ -172,12 +173,21 @@ def process_frame_for_local_recognition(frame):
                 # This student is known AND marked as present in this session (by backend)
                 detected_faces_history[local_id]['status'] = 'known_marked'
                 detected_faces_history[local_id]['backend_id'] = best_known_match['id']
-                detected_faces_history[local_id]['current_display_status'] = f"{best_known_match['name']} (Already Present)"
+                # If 'Present' was just shown, keep it for 2 seconds
+                if 'present_shown_time' in detected_faces_history[local_id]:
+                    if time.time() - detected_faces_history[local_id]['present_shown_time'] < 2:
+                        detected_faces_history[local_id]['current_display_status'] = f"{best_known_match['name']} (Present)"
+                    else:
+                        detected_faces_history[local_id]['current_display_status'] = f"{best_known_match['name']} (Already Present)"
+                else:
+                    detected_faces_history[local_id]['current_display_status'] = f"{best_known_match['name']} (Already Present)"
             elif detected_faces_history[local_id]['status'] == 'unknown':
                 # If previously unknown, update to known_unmarked and show as new
                 detected_faces_history[local_id]['status'] = 'known_unmarked' # Known but not yet marked
                 detected_faces_history[local_id]['backend_id'] = best_known_match['id']
                 detected_faces_history[local_id]['current_display_status'] = f"{best_known_match['name']} (New)"
+                # Remove present_shown_time if it exists
+                detected_faces_history[local_id].pop('present_shown_time', None)
             # No else needed: if already known_unmarked and not yet marked by backend, just keep previous state.
         else:
             # Local recognition: This is an unknown face
@@ -208,10 +218,10 @@ def send_frame_to_backend(frame, class_id, teacher_name):
             data = {
                 'class_id': class_id,
                 'teacher_name': teacher_name,
+                'subject_name': SUBJECT_NAME,  # Send subject_name
                 'date': time.strftime("%Y-%m-%d")
             }
-            
-            response = requests.post(ATTENDANCE_ENDPOINT, files=files, data=data, timeout=15.0) # Further increased timeout
+            response = requests.post(ATTENDANCE_ENDPOINT, files=files, data=data, timeout=15.0)
             response.raise_for_status()
             return response.json()
     except Exception as e:
@@ -292,6 +302,7 @@ def backend_worker():
                                 face_info['status'] = 'known_marked'
                                 face_info['current_display_status'] = 'Present'
                                 marked_student_ids_in_session.add(backend_id)
+                                face_info['present_shown_time'] = time.time()
                             elif backend_status_info.get("status") == "Already Present":
                                 face_info['status'] = 'known_marked' # Still considered marked
                                 face_info['current_display_status'] = 'Already Present'
@@ -324,9 +335,17 @@ if not cap.isOpened():
     exit()
 
 # Set camera properties for better performance
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 480)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 360)
 cap.set(cv2.CAP_PROP_FPS, 30)
+
+# --- Subject selection prompt --- #
+subject_input = input("Enter subject name for attendance (default: Mathematics): ").strip()
+if subject_input:
+    SUBJECT_NAME = subject_input
+else:
+    SUBJECT_NAME = "Mathematics"
+print(f"Subject selected: {SUBJECT_NAME}")
 
 print("Press 's' to start/stop sending frames to the backend.")
 print("Press 'q' to quit.")
@@ -347,14 +366,19 @@ while True:
     if frame_count % FRAME_SKIP == 0 or not sending_frames:
         process_frame_for_local_recognition(frame) # This updates detected_faces_history globally
     
-    # Drawing logic based on global detected_faces_history
     current_time = time.time()
+    # --- Fix status message logic ---
+    faces_in_view = any((current_time - face_info['last_seen_actual']) < 1 for face_info in detected_faces_history.values())
+    if faces_in_view:
+        status_message = ""
+    else:
+        status_message = "No faces in view."
+
+    # Drawing logic based on global detected_faces_history
     for local_id, face_info in detected_faces_history.items():
         if (current_time - face_info['last_seen_actual']) < 1: # Only draw for recently seen faces
             top, right, bottom, left = face_info['last_location']
-            
             text_to_display = f'{face_info["current_display_status"]}'
-            
             box_color = (0, 0, 0) # Default transparent/black
             text_color = (255, 255, 255) # Default white
 
@@ -369,12 +393,11 @@ while True:
                 box_color = (0, 0, 255) # Red for unknown
                 text_color = (0, 0, 255) # Red
                 cv2.rectangle(display_frame, (left, top), (right, bottom), box_color, 2)
-            
             cv2.putText(display_frame, text_to_display, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2)
 
-
     # Display main application status message
-    cv2.putText(display_frame, status_message, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+    if status_message:
+        cv2.putText(display_frame, status_message, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
     # Add frame to queue if sending and queue is not full
     if sending_frames and frame_queue.qsize() < frame_queue.maxsize:
@@ -390,17 +413,14 @@ while True:
         sending_frames = not sending_frames
         if sending_frames:
             status_message = "Sending frames..."
-            # recognized_students_display = [] # REMOVED
             marked_student_ids_in_session.clear()
             detected_faces_history.clear() # Clear tracking on session start/stop
-            # Re-fetch all student embeddings when starting a new session to ensure fresh data
             known_students_data = get_all_students_from_backend()
             if not known_students_data:
                 status_message = "Error: Could not load student data for local recognition! Check backend."
                 sending_frames = False
         else:
             status_message = "Stopped sending frames."
-            # recognized_students_display = [] # REMOVED
             marked_student_ids_in_session.clear()
             detected_faces_history.clear() # Clear tracking on session start/stop
 

@@ -28,6 +28,7 @@ class AttendanceRecord(Document):
     date: str # Store as string for simplicity with current date format, e.g., "YYYY-MM-DD"
     time: str # Store as string, e.g., "HH:MM:SS"
     status: str = "Present"
+    subject_name: str  # New field for subject
 
     class Settings:
         name = "attendance_records" # MongoDB collection name 
