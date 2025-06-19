@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 import argparse
 import json # Import json for metadata files
+import numpy as np
 
 # --- Configuration ---
 # This is where your raw student image folders are located
@@ -20,6 +21,22 @@ NUM_IMAGES_TO_SELECT = 3
 # Minimum face size for local detection to be considered 'clear'
 MIN_FACE_SIZE_FOR_SELECTION = 80 # pixels
 MAX_ASPECT_RATIO_FOR_SELECTION = 1.5 # max width/height or height/width
+
+def enhance_image(img):
+    # Denoise
+    img = cv2.fastNlMeansDenoisingColored(img, None, 10, 10, 7, 21)
+    # Sharpen
+    kernel = np.array([[0, -1, 0],
+                       [-1, 5, -1],
+                       [0, -1, 0]])
+    img = cv2.filter2D(img, -1, kernel)
+    # Histogram Equalization (on Y channel)
+    img_y_cr_cb = cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb)
+    y, cr, cb = cv2.split(img_y_cr_cb)
+    y_eq = cv2.equalizeHist(y)
+    img_y_cr_cb_eq = cv2.merge((y_eq, cr, cb))
+    img_eq = cv2.cvtColor(img_y_cr_cb_eq, cv2.COLOR_YCrCb2BGR)
+    return img_eq
 
 def filter_and_score_face_locations(face_locations, image_shape):
     scored_locations = []
@@ -108,14 +125,14 @@ def process_student_images(source_dir, target_dir, class_name, section):
                     print(f"  Warning: Could not read image '{img_name}'. Skipping.")
                     continue
 
+                # --- Enhancement step ---
+                img = enhance_image(img)
+
                 rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                 face_locations = face_recognition.face_locations(rgb_img, model="hog")
-                
                 scored_locations = filter_and_score_face_locations(face_locations, rgb_img.shape)
 
                 if scored_locations:
-                    # For simplicity, we'll take the best scored face from this image
-                    # and consider this image for selection
                     processed_image_info.append({
                         'path': img_path,
                         'score': scored_locations[0]['score'],
@@ -159,12 +176,15 @@ def process_student_images(source_dir, target_dir, class_name, section):
             metadata_destination_path = os.path.join(target_dir, metadata_new_filename)
             
             try:
-                shutil.copyfile(original_path, image_destination_path)
+                # Save the enhanced image instead of copying the original
+                img = cv2.imread(original_path)
+                img = enhance_image(img)
+                cv2.imwrite(image_destination_path, img)
                 with open(metadata_destination_path, 'w') as f:
                     json.dump(metadata, f, indent=4)
-                print(f"    Copied '{img_info['original_filename']}' to '{image_new_filename}' and created metadata.")
+                print(f"    Saved enhanced '{img_info['original_filename']}' as '{image_new_filename}' and created metadata.")
             except Exception as e:
-                print(f"    Error copying '{img_info['original_filename']}' or creating metadata: {e}")
+                print(f"    Error saving enhanced '{img_info['original_filename']}' or creating metadata: {e}")
 
     print("\nImage preparation completed!")
     print(f"Please check the '{TARGET_PROCESSED_IMAGES_DIR}' directory and then run 'python upload_students.py'.")

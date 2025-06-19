@@ -271,7 +271,8 @@ async def process_attendance_frame(
         current_face_location = face_locations[i]
 
         if known_face_encodings:
-            matches = await run_in_threadpool(face_recognition.compare_faces, known_face_encodings, face_encoding, tolerance=0.6)
+            # Lower tolerance to 0.5
+            matches = await run_in_threadpool(face_recognition.compare_faces, known_face_encodings, face_encoding, tolerance=0.5)
             face_distances = await run_in_threadpool(face_recognition.face_distance, known_face_encodings, face_encoding)
             
             best_match_index = -1
@@ -279,8 +280,9 @@ async def process_attendance_frame(
                 # Find the best match (lowest distance among matches)
                 matched_indices = [i for i, x in enumerate(matches) if x]
                 best_match_index = matched_indices[np.argmin(face_distances[matched_indices])]
-            
-            if best_match_index != -1:
+
+            # Only accept match if distance is below 0.5
+            if best_match_index != -1 and face_distances[best_match_index] < 0.5:
                 matched_student = known_student_data[best_match_index]
                 student_obj_id = matched_student["student_id"]
                 norm_section = matched_student["section"].strip().lower()
@@ -298,7 +300,7 @@ async def process_attendance_frame(
                 print(f"Existing attendance found: {existing_attendance is not None}")
                 student_response_data = {
                     **matched_student,
-                    "face_location": list(current_face_location) # Add face location to the response
+                    "face_location": list(current_face_location)
                 }
                 if not existing_attendance:
                     attendance_record = AttendanceRecord(
@@ -318,6 +320,22 @@ async def process_attendance_frame(
                 else:
                     recognized_students.append({**student_response_data, "status": "Already Present"})
                 matched_students_ids.add(student_obj_id)
+            else:
+                # No good match, label as Unknown
+                recognized_students.append({
+                    "student_id": None,
+                    "name": "Unknown",
+                    "face_location": list(current_face_location),
+                    "status": "Unknown"
+                })
+        else:
+            # No known faces in DB, label as Unknown
+            recognized_students.append({
+                "student_id": None,
+                "name": "Unknown",
+                "face_location": list(current_face_location),
+                "status": "Unknown"
+            })
 
     return {"status": "success", "recognized_students": recognized_students}
 

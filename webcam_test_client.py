@@ -19,7 +19,7 @@ TEACHER_NAME = "Miss Maria Khattak" # Example teacher name
 SUBJECT_NAME = "Mathematics"  # Example subject name, change as needed
 
 # --- Performance Settings --- #
-FRAME_SKIP = 8  # Process every 8th frame for local detection (increased for performance)
+FRAME_SKIP = 10  # Process every 10th frame for local detection (improved performance)
 SEND_INTERVAL = 2.0  # seconds between sending frames to backend for new detections (increased for performance)
 MIN_FACE_SIZE = 80
 MAX_ASPECT_RATIO = 1.5
@@ -248,77 +248,47 @@ def backend_worker():
         if not frame_queue.empty():
             frame_to_send = frame_queue.get() # Get the latest frame
             
-            # --- Decision Logic for Sending to Backend ---
-            # A frame will be sent if:
-            # 1. Any known, UNMARKED students are currently in view.
-            # 2. OR, any UNKNOWN faces haven't been sent for a while (retry mechanism).
-            # This decision is based on detected_faces_history, which is updated by process_frame_for_local_recognition
-
-            send_to_backend_needed = False
-            
-            current_relevant_faces = []
-            for local_id, face_info in detected_faces_history.items():
-                if (current_time - face_info['last_seen_actual']) < 0.5: # Only consider recently seen faces
-                    current_relevant_faces.append(face_info)
-
-            if not current_relevant_faces:
+            # --- Improved Decision Logic for Sending to Backend ---
+            # Send a frame if ANY face is detected in view
+            faces_in_view = [face_info for face_info in detected_faces_history.values() if (current_time - face_info['last_seen_actual']) < 1]
+            if not faces_in_view:
                 status_message = "No faces in view."
                 last_frame_sent_time = current_time # Update time to respect interval
                 continue
-            
-            for face_info in current_relevant_faces:
-                if face_info['status'] == 'known_unmarked' and face_info['backend_id'] not in marked_student_ids_in_session:
-                    send_to_backend_needed = True
-                    break
-                elif face_info['status'] == 'unknown':
-                    if (current_time - face_info.get('last_sent_to_backend', 0)) > UNRECOGNIZED_RETRY_INTERVAL:
-                        send_to_backend_needed = True
-                        break
-            
-            if not send_to_backend_needed: # If no known unmarked, and no unknown need retrying
-                status_message = "All relevant faces processed/marked."
-                last_frame_sent_time = current_time
-                continue # Skip sending to backend
 
-            # If we reach here, send to backend
             print("Sending frame to backend...")
-            result = send_frame_to_backend(frame_to_send, CLASS_ID, TEACHER_NAME)
+            try:
+                result = send_frame_to_backend(frame_to_send, CLASS_ID, TEACHER_NAME)
+                print(f"Backend response: {result}")
+            except Exception as e:
+                print(f"Error sending frame to backend: {e}")
+                status_message = f"Backend Error: {e}"
+                last_frame_sent_time = current_time
+                continue
             
             if result and result.get("status") == "success":
-                # Update client-side tracking and display based on backend response
                 recognized_students_from_backend = result.get("recognized_students", [])
-                
-                # Create a lookup for backend recognized students by their database ID
                 backend_recognized_map = {s['student_id']: s for s in recognized_students_from_backend}
-
-                # Update detected_faces_history for all relevant faces
-                for local_id, face_info in list(detected_faces_history.items()): # Iterate over copy
-                    if (current_time - face_info['last_seen_actual']) < 0.5: # Only update recently seen faces
+                for local_id, face_info in list(detected_faces_history.items()):
+                    if (current_time - face_info['last_seen_actual']) < 0.5:
                         backend_id = face_info['backend_id']
                         if backend_id and backend_id in backend_recognized_map:
                             backend_status_info = backend_recognized_map[backend_id]
-                            # Update status based on backend confirmation
                             if backend_status_info.get("status") == "Present":
                                 face_info['status'] = 'known_marked'
+                                face_info['present_shown_time'] = time.time()
                                 face_info['current_display_status'] = 'Present'
                                 marked_student_ids_in_session.add(backend_id)
-                                face_info['present_shown_time'] = time.time()
                             elif backend_status_info.get("status") == "Already Present":
-                                face_info['status'] = 'known_marked' # Still considered marked
+                                face_info['status'] = 'known_marked'
                                 face_info['current_display_status'] = 'Already Present'
                                 marked_student_ids_in_session.add(backend_id)
-                            # Update last sent time if this face was part of the sent frame
                             face_info['last_sent_to_backend'] = current_time
                         elif face_info['status'] == 'unknown':
-                            # This unknown face was sent, update its last_sent_to_backend timestamp
                             face_info['last_sent_to_backend'] = current_time
-
                 status_message = "Backend Response: OK"
-                                
             else:
                 status_message = "Backend Error or Timeout"
-                # If backend failed, ensure we still retry unknown faces etc.
-                
             last_frame_sent_time = current_time
         else:
             time.sleep(0.05) # No frame in queue
@@ -383,7 +353,12 @@ while True:
             text_color = (255, 255, 255) # Default white
 
             if face_info['status'] == 'known_marked':
-                text_color = (255, 255, 0) # Yellow for Already Present/Marked
+                # Show 'Present' for 1.5s, then 'Already Present'
+                if 'present_shown_time' in face_info and (current_time - face_info['present_shown_time']) < 1.5:
+                    text_to_display = 'Present'
+                else:
+                    text_to_display = 'Already Present'
+                text_color = (255, 255, 0) # Yellow
                 # No box drawn
             elif face_info['status'] == 'known_unmarked':
                 box_color = (0, 255, 0) # Green for known, not marked
@@ -392,6 +367,7 @@ while True:
             elif face_info['status'] == 'unknown':
                 box_color = (0, 0, 255) # Red for unknown
                 text_color = (0, 0, 255) # Red
+                text_to_display = 'Unknown'
                 cv2.rectangle(display_frame, (left, top), (right, bottom), box_color, 2)
             cv2.putText(display_frame, text_to_display, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2)
 
@@ -400,7 +376,8 @@ while True:
         cv2.putText(display_frame, status_message, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
     # Add frame to queue if sending and queue is not full
-    if sending_frames and frame_queue.qsize() < frame_queue.maxsize:
+    faces_in_view = any((current_time - face_info['last_seen_actual']) < 1 for face_info in detected_faces_history.values())
+    if sending_frames and faces_in_view and frame_queue.qsize() < frame_queue.maxsize:
         frame_queue.put(frame.copy())
 
     cv2.imshow("Webcam Test Client", display_frame)
