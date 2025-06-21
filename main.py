@@ -339,6 +339,39 @@ async def process_attendance_frame(
 
     return {"status": "success", "recognized_students": recognized_students}
 
+@app.get("/attendance/{roll_no}")
+async def get_attendance_by_roll_no(roll_no: str):
+    """
+    Retrieve all attendance records for a specific student by their roll number.
+    
+    Args:
+        roll_no (str): The roll number of the student
+        
+    Returns:
+        dict: JSON response containing attendance records for the student
+    """
+    try:
+        # Query the attendance_records collection for all documents where roll_no matches
+        attendance_records = await AttendanceRecord.find({"roll_no": roll_no}).to_list()
+        
+        # Convert Beanie documents to dictionaries for JSON serialization
+        records_data = []
+        for record in attendance_records:
+            record_dict = record.dict()
+            # Convert ObjectId to string for JSON serialization
+            record_dict["_id"] = str(record.id)
+            records_data.append(record_dict)
+        
+        return {
+            "status": "success",
+            "roll_no": roll_no,
+            "attendance_records": records_data,
+            "total_records": len(records_data)
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred while fetching attendance records: {str(e)}")
+
 if __name__ == "__main__":
     # For local testing, ensure MONGO_URI and DATABASE_NAME are set in your .env file or environment
     uvicorn.run(app, host="0.0.0.0", port=8000) 
