@@ -214,6 +214,37 @@ async def get_all_students():
         students_data.append(student_dict)
     return {"status": "success", "students": students_data}
 
+@app.get("/admin/students/{roll_no}", response_model=Student)
+async def get_student_by_roll_no(roll_no: str):
+    """Fetches a single student record by roll number."""
+    student = await Student.find_one(Student.roll_no == roll_no)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    return student
+
+@app.put("/admin/students/{roll_no}", response_model=Student)
+async def update_student(roll_no: str, name: str = Form(...), class_name: str = Form(...), section: str = Form(...)):
+    """Updates a student's metadata (name, class, section)."""
+    student = await Student.find_one(Student.roll_no == roll_no)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    student.name = name
+    student.class_name = class_name
+    student.section = section
+    await student.save()
+    return student
+
+@app.delete("/admin/students/{roll_no}")
+async def delete_student(roll_no: str):
+    """Deletes a student and all their associated data."""
+    student = await Student.find_one(Student.roll_no == roll_no)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    await student.delete()
+    return {"status": "success", "message": f"Student with roll number {roll_no} has been deleted."}
+
 # --- New Attendance Endpoints ---
 
 @app.post("/attend/process_frame")
@@ -371,6 +402,112 @@ async def get_attendance_by_roll_no(roll_no: str):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred while fetching attendance records: {str(e)}")
+
+@app.get("/attendance/report/class", response_model=List[AttendanceRecord])
+async def get_class_attendance_report(
+    class_name: str,
+    section: str,
+    subject_name: str,
+    date: Optional[str] = None
+):
+    """
+    Get a full attendance report for a specific class, section, and subject on a given date.
+    If no date is provided, it defaults to the current day.
+    """
+    if date is None:
+        date = datetime.now().strftime("%Y-%m-%d")
+
+    query = {
+        "class_name": class_name.strip().lower(),
+        "section": section.strip().lower(),
+        "subject_name": subject_name.strip().lower(),
+        "date": date
+    }
+
+    records = await AttendanceRecord.find(query).to_list()
+
+    if not records:
+        return []
+
+    return records
+
+@app.get("/attendance/{roll_no}/{subject_name}", response_model=List[AttendanceRecord])
+async def get_student_subject_attendance(roll_no: str, subject_name: str):
+    """
+    Get a student's attendance records for a specific subject.
+    """
+    query = {
+        "roll_no": roll_no,
+        "subject_name": subject_name.strip().lower()
+    }
+
+    records = await AttendanceRecord.find(query).sort("date").to_list()
+
+    if not records:
+        return []
+
+    return records
+
+@app.post("/attendance/manual", response_model=AttendanceRecord)
+async def manual_attendance(
+    roll_no: str = Form(...),
+    subject_name: str = Form(...),
+    teacher_name: str = Form(...),
+    class_name: str = Form(...),
+    section: str = Form(...),
+    status: str = Form(...),
+    date: Optional[str] = Form(None)
+):
+    """Manually create or update an attendance record for a student."""
+    if date is None:
+        date = datetime.now().strftime("%Y-%m-%d")
+    
+    student = await Student.find_one(Student.roll_no == roll_no)
+    if not student:
+        raise HTTPException(status_code=404, detail=f"Student with roll number {roll_no} not found.")
+
+    # Check if a record already exists for this student, subject, and date
+    existing_record = await AttendanceRecord.find_one({
+        "roll_no": roll_no,
+        "subject_name": subject_name,
+        "date": date
+    })
+
+    if existing_record:
+        # If record exists, update its status
+        existing_record.status = status
+        await existing_record.save()
+        return existing_record
+    else:
+        # If no record exists, create a new one
+        new_record = AttendanceRecord(
+            student_id=str(student.id),
+            roll_no=roll_no,
+            name=student.name,
+            class_name=class_name,
+            section=section,
+            teacher_name=teacher_name,
+            subject_name=subject_name,
+            status=status,
+            date=date,
+            time=datetime.now().strftime("%H:%M:%S")
+        )
+        await new_record.insert()
+        return new_record
+
+@app.put("/attendance/manual/{record_id}", response_model=AttendanceRecord)
+async def update_attendance_status(record_id: str, status: str = Form(...)):
+    """
+    Updates the status of an existing attendance record by its ID.
+    Status can be 'Present', 'Absent', 'Leave', etc.
+    """
+    record = await AttendanceRecord.get(record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Attendance record not found")
+
+    record.status = status
+    await record.save()
+    return record
 
 if __name__ == "__main__":
     # For local testing, ensure MONGO_URI and DATABASE_NAME are set in your .env file or environment
