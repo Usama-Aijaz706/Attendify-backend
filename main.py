@@ -252,14 +252,17 @@ async def process_attendance_frame(
     file: UploadFile = File(...),
     class_id: str = Form(...),
     teacher_name: str = Form(...),
-    subject_name: str = Form(...),  # New field for subject
-    date: Optional[str] = Form(None) # Allow date to be sent or determined by backend
+    subject_name: str = Form(...),
+    date: Optional[str] = Form(None),
+    class_time: Optional[str] = Form(None)
 ):
     print(f"Received frame for attendance in class {class_id} by {teacher_name}")
 
     if date is None:
         date = datetime.now().strftime("%Y-%m-%d")
     current_time = datetime.now().strftime("%H:%M:%S")
+    if not class_time:
+        class_time = datetime.now().strftime("%H:%M")
 
     contents = await file.read()
     rgb_img = await run_in_threadpool(preprocess_image_for_detection, contents)
@@ -324,7 +327,8 @@ async def process_attendance_frame(
                     "date": date,
                     "teacher_name": norm_teacher_name,
                     "section": norm_section,
-                    "subject_name": norm_subject_name
+                    "subject_name": norm_subject_name,
+                    "class_time": class_time
                 }
                 print(f"Attendance query: {attendance_query}")
                 existing_attendance = await AttendanceRecord.find_one(attendance_query)
@@ -344,7 +348,8 @@ async def process_attendance_frame(
                         date=date,
                         time=current_time,
                         status="Present",
-                        subject_name=norm_subject_name
+                        subject_name=norm_subject_name,
+                        class_time=class_time
                     )
                     await attendance_record.insert()
                     recognized_students.append({**student_response_data, "status": "Present"})
@@ -456,11 +461,14 @@ async def manual_attendance(
     class_name: str = Form(...),
     section: str = Form(...),
     status: str = Form(...),
-    date: Optional[str] = Form(None)
+    date: Optional[str] = Form(None),
+    class_time: Optional[str] = Form(None)
 ):
     """Manually create or update an attendance record for a student."""
     if date is None:
         date = datetime.now().strftime("%Y-%m-%d")
+    if not class_time:
+        class_time = datetime.now().strftime("%H:%M")
     
     student = await Student.find_one(Student.roll_no == roll_no)
     if not student:
@@ -476,6 +484,7 @@ async def manual_attendance(
     if existing_record:
         # If record exists, update its status
         existing_record.status = status
+        existing_record.class_time = class_time
         await existing_record.save()
         return existing_record
     else:
@@ -490,7 +499,8 @@ async def manual_attendance(
             subject_name=subject_name,
             status=status,
             date=date,
-            time=datetime.now().strftime("%H:%M:%S")
+            time=datetime.now().strftime("%H:%M:%S"),
+            class_time=class_time
         )
         await new_record.insert()
         return new_record
@@ -508,6 +518,79 @@ async def update_attendance_status(record_id: str, status: str = Form(...)):
     record.status = status
     await record.save()
     return record
+
+@app.post("/attendance/close_session")
+async def close_attendance_session(
+    class_name: str = Form(...),
+    section: str = Form(...),
+    subject_name: str = Form(...),
+    date: Optional[str] = Form(None),
+    teacher_name: Optional[str] = Form(None),
+    class_time: Optional[str] = Form(None)
+):
+    if date is None:
+        date = datetime.now().strftime("%Y-%m-%d")
+    if not class_time:
+        class_time = datetime.now().strftime("%H:%M")
+    students = await Student.find({
+        "class_name": class_name,
+        "section": section
+    }).to_list()
+    if not students:
+        raise HTTPException(status_code=404, detail="No students found for this class and section.")
+    attendance_records = await AttendanceRecord.find({
+        "class_name": class_name,
+        "section": section,
+        "subject_name": subject_name,
+        "date": date,
+        "class_time": class_time
+    }).to_list()
+    present_roll_nos = {record.roll_no for record in attendance_records if record.status == "Present"}
+    absent_students = []
+    for student in students:
+        if student.roll_no not in present_roll_nos:
+            absent_record = AttendanceRecord(
+                student_id=str(student.id),
+                roll_no=student.roll_no,
+                name=student.name,
+                class_name=class_name,
+                section=section,
+                teacher_name=teacher_name or "",
+                date=date,
+                time=datetime.now().strftime("%H:%M:%S"),
+                status="Absent",
+                subject_name=subject_name,
+                class_time=class_time
+            )
+            await absent_record.insert()
+            absent_students.append(student.roll_no)
+    return {
+        "status": "success",
+        "absent_marked": absent_students,
+        "absent_count": len(absent_students)
+    }
+
+@app.get("/attendance/report/all")
+async def get_all_attendance_records(
+    date: Optional[str] = None,
+    class_name: Optional[str] = None,
+    section: Optional[str] = None,
+    subject_name: Optional[str] = None,
+    class_time: Optional[str] = None
+):
+    query = {}
+    if date:
+        query["date"] = date
+    if class_name:
+        query["class_name"] = class_name
+    if section:
+        query["section"] = section
+    if subject_name:
+        query["subject_name"] = subject_name
+    if class_time:
+        query["class_time"] = class_time
+    records = await AttendanceRecord.find(query).to_list()
+    return {"status": "success", "attendance_records": records, "total_records": len(records)}
 
 if __name__ == "__main__":
     # For local testing, ensure MONGO_URI and DATABASE_NAME are set in your .env file or environment

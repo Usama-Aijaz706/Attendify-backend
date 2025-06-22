@@ -29,6 +29,7 @@ class AttendanceRecord(Document):
     time: str # Store as string, e.g., "HH:MM:SS"
     status: str = "Present"
     subject_name: Optional[str] = None  # New field for subject, now optional
+    class_time: Optional[str] = None  # New field for class time, optional
 
     class Settings:
         name = "attendance_records" # MongoDB collection name 
