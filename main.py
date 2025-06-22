@@ -563,7 +563,7 @@ async def close_attendance_session(
                 class_time=class_time
             )
             await absent_record.insert()
-            absent_students.append(student.roll_no)
+            absent_students.append({"roll_no": student.roll_no, "name": student.name})
     return {
         "status": "success",
         "absent_marked": absent_students,
