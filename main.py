@@ -617,6 +617,27 @@ async def get_all_attendance_records(
     records = await AttendanceRecord.find(query).to_list()
     return {"status": "success", "attendance_records": records, "total_records": len(records)}
 
+@app.get("/students/filter")
+async def get_students_by_class_section(
+    class_name: str,
+    section: str
+):
+    students = await Student.find({
+        "class_name": class_name,
+        "section": section
+    }).to_list()
+    filtered = []
+    for student in students:
+        filtered.append({
+            "_id": str(student.id),
+            "name": student.name,
+            "roll_no": student.roll_no,
+            "class_name": student.class_name,
+            "section": student.section,
+            "embedding_ids": [emb.embedding_id for emb in student.face_embeddings]
+        })
+    return {"students": filtered}
+
 if __name__ == "__main__":
     # For local testing, ensure MONGO_URI and DATABASE_NAME are set in your .env file or environment
     uvicorn.run(app, host="0.0.0.0", port=8000) 
