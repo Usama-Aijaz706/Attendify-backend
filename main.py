@@ -1,6 +1,8 @@
 from dotenv import load_dotenv
 import pandas as pd
 import io
+import requests
+from io import BytesIO
 
 load_dotenv()
 
@@ -159,6 +161,28 @@ async def bulk_register_metadata(file: UploadFile = File(...)):
                 failed_uploads.append({"row": index + 2, "message": "Missing required data (roll_no, name, class_name, or section)"})
                 continue
 
+            image_url = row.get('image', '').strip() if 'image' in row else ''
+            extracted_embeddings = []
+
+            if image_url:
+                try:
+                    response = requests.get(image_url)
+                    if response.status_code == 200:
+                        image_bytes = BytesIO(response.content)
+                        rgb_img = await run_in_threadpool(preprocess_image_for_detection, image_bytes.read())
+                        if rgb_img is not None:
+                            face_encodings = await run_in_threadpool(extract_face_embeddings_from_image, rgb_img)
+                            if face_encodings:
+                                extracted_embeddings.append(FaceEmbedding(vector=face_encodings[0].tolist()))
+                            else:
+                                failed_uploads.append({"row": index + 2, "message": f"No face found in image at {image_url}"})
+                        else:
+                            failed_uploads.append({"row": index + 2, "message": f"Invalid image format at {image_url}"})
+                    else:
+                        failed_uploads.append({"row": index + 2, "message": f"Failed to download image from {image_url}"})
+                except Exception as e:
+                    failed_uploads.append({"row": index + 2, "message": f"Error downloading/processing image: {str(e)}"})
+
             try:
                 # Check if student already exists by roll_no and name
                 existing_student = await Student.find_one({"roll_no": roll_no, "name": name})
@@ -166,17 +190,18 @@ async def bulk_register_metadata(file: UploadFile = File(...)):
                     # Update existing student's metadata
                     existing_student.class_name = class_name
                     existing_student.section = section
-                    # Note: embeddings are NOT updated here. They should be uploaded via /admin/students/register
+                    if extracted_embeddings:
+                        existing_student.face_embeddings = extracted_embeddings
                     await existing_student.save()
                     successful_uploads += 1
                 else:
-                    # Create new student (without embeddings)
+                    # Create new student (with or without embeddings)
                     new_student = Student(
                         roll_no=roll_no,
                         name=name,
                         class_name=class_name,
                         section=section,
-                        face_embeddings=[] # Initialize as empty, images added separately
+                        face_embeddings=extracted_embeddings
                     )
                     await new_student.insert()
                     successful_uploads += 1
