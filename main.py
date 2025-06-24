@@ -628,13 +628,17 @@ async def get_students_by_class_section(
     }).to_list()
     filtered = []
     for student in students:
+        embedding_ids = [
+            emb.embedding_id if hasattr(emb, 'embedding_id') else emb.get('embedding_id')
+            for emb in getattr(student, 'face_embeddings', [])
+        ]
         filtered.append({
             "_id": str(student.id),
             "name": student.name,
             "roll_no": student.roll_no,
             "class_name": student.class_name,
             "section": student.section,
-            "embedding_ids": [emb.embedding_id for emb in student.face_embeddings]
+            "embedding_ids": embedding_ids
         })
     return {"students": filtered}
 
