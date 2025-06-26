@@ -3,6 +3,8 @@ import pandas as pd
 import io
 import requests
 from io import BytesIO
+import threading
+import httpx
 
 load_dotenv()
 
@@ -26,6 +28,10 @@ app = FastAPI()
 # Environment variables for MongoDB connection
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 DATABASE_NAME = os.getenv("DATABASE_NAME", "attendify_db")
+
+# --- Backend Camera Control ---
+camera = None
+camera_lock = threading.Lock()
 
 @app.on_event("startup")
 async def start_database():
@@ -641,6 +647,64 @@ async def get_students_by_class_section(
             "embedding_ids": embedding_ids
         })
     return {"students": filtered}
+
+@app.post("/start_camera")
+def start_camera():
+    global camera
+    with camera_lock:
+        if camera is None:
+            camera = cv2.VideoCapture(0)
+            if not camera.isOpened():
+                camera = None
+                return {"status": "error", "message": "Failed to open camera."}
+        return {"status": "success", "message": "Camera started."}
+
+@app.post("/stop_camera")
+def stop_camera():
+    global camera
+    with camera_lock:
+        if camera is not None:
+            camera.release()
+            camera = None
+            return {"status": "success", "message": "Camera stopped."}
+        return {"status": "error", "message": "Camera was not running."}
+
+@app.post("/capture_frame")
+async def capture_frame(
+    class_id: str = Form(...),
+    teacher_name: str = Form(...),
+    subject_name: str = Form(...),
+    date: Optional[str] = Form(None),
+    class_time: Optional[str] = Form(None)
+):
+    global camera
+    with camera_lock:
+        if camera is None:
+            return {"status": "error", "message": "Camera is not started."}
+        ret, frame = camera.read()
+        if not ret:
+            return {"status": "error", "message": "Failed to capture frame."}
+        _, buffer = cv2.imencode('.jpg', frame)
+        contents = buffer.tobytes()
+
+    # Prepare form data for internal POST
+    data = {
+        "class_id": class_id,
+        "teacher_name": teacher_name,
+        "subject_name": subject_name,
+        "date": date or "",
+        "class_time": class_time or "",
+    }
+    files = {"file": ("frame.jpg", contents, "image/jpeg")}
+
+    # Use httpx.AsyncClient for internal async POST
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "http://localhost:8000/attend/process_frame",
+            data=data,
+            files=files,
+        )
+        return response.json()
 
 if __name__ == "__main__":
     # For local testing, ensure MONGO_URI and DATABASE_NAME are set in your .env file or environment
