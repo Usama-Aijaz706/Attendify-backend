@@ -8,7 +8,7 @@ import httpx
 
 load_dotenv()
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Form
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 import numpy as np
 import cv2
@@ -22,6 +22,7 @@ from datetime import datetime
 import uuid
 from face_service import preprocess_image_for_detection, extract_face_embeddings_from_image, get_face_locations_and_embeddings
 from starlette.concurrency import run_in_threadpool
+from beanie import PydanticObjectId
 
 app = FastAPI()
 
@@ -705,6 +706,79 @@ async def capture_frame(
             files=files,
         )
         return response.json()
+
+@app.get("/attendance/summary/by_subject_and_section")
+async def attendance_summary_by_subject_and_section(
+    class_name: str = Query(...),
+    section: str = Query(...),
+    teacher_name: Optional[str] = Query(None)
+):
+    """
+    Returns attendance summary grouped by subject and student for a class-section, optionally filtered by teacher.
+    """
+    from motor.motor_asyncio import AsyncIOMotorClient
+    import os
+    MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+    DATABASE_NAME = os.getenv("DATABASE_NAME", "attendify_db")
+    client = AsyncIOMotorClient(MONGO_URI)
+    db = client[DATABASE_NAME]
+    collection = db.attendance_records
+
+    match_filter = {
+        "class_name": class_name.strip().lower(),
+        "section": section.strip().lower()
+    }
+    if teacher_name:
+        match_filter["teacher_name"] = teacher_name.strip().lower()
+
+    pipeline = [
+        {"$match": match_filter},
+        {"$group": {
+            "_id": {
+                "subject_name": "$subject_name",
+                "roll_no": "$roll_no",
+                "name": "$name"
+            },
+            "present_count": {
+                "$sum": {"$cond": [ {"$eq": ["$status", "Present"]}, 1, 0 ] }
+            },
+            "absent_count": {
+                "$sum": {"$cond": [ {"$eq": ["$status", "Absent"]}, 1, 0 ] }
+            },
+            "total": {"$sum": 1}
+        }},
+        {"$addFields": {
+            "percentage": {
+                "$cond": [
+                    {"$eq": ["$total", 0]},
+                    0,
+                    {"$multiply": [ {"$divide": ["$present_count", "$total"] }, 100 ] }
+                ]
+            }
+        }},
+        {"$group": {
+            "_id": "$_id.subject_name",
+            "records": {
+                "$push": {
+                    "roll_no": "$_id.roll_no",
+                    "name": "$_id.name",
+                    "present_count": "$present_count",
+                    "absent_count": "$absent_count",
+                    "percentage": {"$round": ["$percentage", 1]}
+                }
+            }
+        }},
+        {"$project": {
+            "_id": 0,
+            "subject_name": "$_id",
+            "records": 1
+        }}
+    ]
+
+    result = []
+    async for doc in collection.aggregate(pipeline):
+        result.append(doc)
+    return {"status": "success", "data": result}
 
 if __name__ == "__main__":
     # For local testing, ensure MONGO_URI and DATABASE_NAME are set in your .env file or environment
