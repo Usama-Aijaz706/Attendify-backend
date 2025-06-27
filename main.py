@@ -780,6 +780,33 @@ async def attendance_summary_by_subject_and_section(
         result.append(doc)
     return {"status": "success", "data": result}
 
+@app.get("/attendance/by_teacher_class_subject")
+async def get_attendance_by_teacher_class_subject(
+    teacher_name: str = Query(...),
+    class_name: str = Query(...),
+    subject_name: str = Query(...)
+):
+    from motor.motor_asyncio import AsyncIOMotorClient
+    import os
+    MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+    DATABASE_NAME = os.getenv("DATABASE_NAME", "attendify_db")
+    client = AsyncIOMotorClient(MONGO_URI)
+    db = client[DATABASE_NAME]
+    collection = db.attendance_records
+
+    match_filter = {
+        "teacher_name": teacher_name.strip().lower(),
+        "class_name": class_name.strip().lower(),
+        "subject_name": subject_name.strip().lower()
+    }
+
+    records = []
+    async for doc in collection.find(match_filter):
+        doc["_id"] = str(doc["_id"])
+        records.append(doc)
+
+    return {"status": "success", "records": records, "count": len(records)}
+
 if __name__ == "__main__":
     # For local testing, ensure MONGO_URI and DATABASE_NAME are set in your .env file or environment
     uvicorn.run(app, host="0.0.0.0", port=8000) 
