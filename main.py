@@ -780,11 +780,11 @@ async def attendance_summary_by_subject_and_section(
         result.append(doc)
     return {"status": "success", "data": result}
 
-@app.get("/attendance/by_teacher_class_subject")
-async def get_attendance_by_teacher_class_subject(
+@app.get("/attendance/by_teacher_class_section")
+async def get_attendance_by_teacher_class_section(
     teacher_name: str = Query(...),
-    class_name: str = Query(...),
-    subject_name: str = Query(...)
+    class_: str = Query(..., alias="class"),
+    section: str = Query(...)
 ):
     from motor.motor_asyncio import AsyncIOMotorClient
     import os
@@ -796,8 +796,8 @@ async def get_attendance_by_teacher_class_subject(
 
     match_filter = {
         "teacher_name": teacher_name.strip().lower(),
-        "class_name": class_name.strip().lower(),
-        "subject_name": subject_name.strip().lower()
+        "class": class_.strip().lower(),
+        "section": section.strip().lower()
     }
 
     records = []
