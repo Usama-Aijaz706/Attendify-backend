@@ -782,9 +782,16 @@ async def get_attendance_by_teacher_class_section(
     }
     print("Querying with filter:", match_filter)
     records = await AttendanceRecord.find(match_filter).to_list()
-    for doc in records:
-        doc["_id"] = str(doc["_id"]) if "_id" in doc else None
-    return {"status": "success", "records": records, "count": len(records)}
+    records_data = []
+    for record in records:
+        record_dict = record.dict()
+        record_dict["_id"] = str(record.id)
+        records_data.append(record_dict)
+    return {
+        "status": "success",
+        "records": records_data,
+        "count": len(records_data)
+    }
 
 if __name__ == "__main__":
     # For local testing, ensure MONGO_URI and DATABASE_NAME are set in your .env file or environment
