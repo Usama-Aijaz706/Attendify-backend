@@ -713,24 +713,14 @@ async def attendance_summary_by_subject_and_section(
     section: str = Query(...),
     teacher_name: Optional[str] = Query(None)
 ):
-    """
-    Returns attendance summary grouped by subject and student for a class-section, optionally filtered by teacher.
-    """
-    from motor.motor_asyncio import AsyncIOMotorClient
-    import os
-    MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-    DATABASE_NAME = os.getenv("DATABASE_NAME", "attendify_db")
-    client = AsyncIOMotorClient(MONGO_URI)
-    db = client[DATABASE_NAME]
-    collection = db.attendance_records
-
     match_filter = {
         "class_name": class_name.strip().lower(),
         "section": section.strip().lower()
     }
     if teacher_name:
         match_filter["teacher_name"] = teacher_name.strip().lower()
-
+    print("Summary aggregation with filter:", match_filter)
+    # Use Beanie's aggregate method
     pipeline = [
         {"$match": match_filter},
         {"$group": {
@@ -774,9 +764,8 @@ async def attendance_summary_by_subject_and_section(
             "records": 1
         }}
     ]
-
     result = []
-    async for doc in collection.aggregate(pipeline):
+    async for doc in AttendanceRecord.aggregate(pipeline):
         result.append(doc)
     return {"status": "success", "data": result}
 
@@ -786,26 +775,15 @@ async def get_attendance_by_teacher_class_section(
     class_: str = Query(..., alias="class"),
     section: str = Query(...)
 ):
-    from motor.motor_asyncio import AsyncIOMotorClient
-    import os
-    MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-    DATABASE_NAME = os.getenv("DATABASE_NAME", "attendify_db")
-    client = AsyncIOMotorClient(MONGO_URI)
-    db = client[DATABASE_NAME]
-    collection = db.attendance_records
-
     match_filter = {
         "teacher_name": teacher_name.strip().lower(),
         "class_name": class_.strip().lower(),
         "section": section.strip().lower()
     }
     print("Querying with filter:", match_filter)
-
-    records = []
-    async for doc in collection.find(match_filter):
-        doc["_id"] = str(doc["_id"])
-        records.append(doc)
-
+    records = await AttendanceRecord.find(match_filter).to_list()
+    for doc in records:
+        doc["_id"] = str(doc["_id"]) if "_id" in doc else None
     return {"status": "success", "records": records, "count": len(records)}
 
 if __name__ == "__main__":
