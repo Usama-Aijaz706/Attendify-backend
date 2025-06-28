@@ -799,6 +799,7 @@ async def get_attendance_by_teacher_class_section(
         "class_name": class_.strip().lower(),
         "section": section.strip().lower()
     }
+    print("Querying with filter:", match_filter)
 
     records = []
     async for doc in collection.find(match_filter):
