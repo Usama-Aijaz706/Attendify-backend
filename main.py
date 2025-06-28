@@ -796,7 +796,7 @@ async def get_attendance_by_teacher_class_section(
 
     match_filter = {
         "teacher_name": teacher_name.strip().lower(),
-        "class": class_.strip().lower(),
+        "class_name": class_.strip().lower(),
         "section": section.strip().lower()
     }
 
